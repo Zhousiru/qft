@@ -1,0 +1,24 @@
+[package]
+name = "qft"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "server"
+path = "src/server/main.rs"
+
+[[bin]]
+name = "client"
+path = "src/client/main.rs"
+
+[dependencies]
+uuid = { version = "1", features = ["v4"] }
+anyhow = { version = "1" }
+rustls = { version = "0.21.0", features = ["quic", "dangerous_configuration"] }
+tokio = { version = "1", features = ["full"] }
+quinn = { version = "0.10" }
+rcgen = { version = "0.12.0" }
+once_cell = { version = "1" }
+bytes = { version = "1" }
+raptorq = { version = "2" }
+rayon = { version = "1" }
