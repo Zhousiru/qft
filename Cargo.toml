@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "server"
+name = "qft-server"
 path = "src/server/main.rs"
 
 [[bin]]
-name = "client"
+name = "qft-client"
 path = "src/client/main.rs"
 
 [dependencies]
@@ -21,4 +21,3 @@ rcgen = { version = "0.12.0" }
 once_cell = { version = "1" }
 bytes = { version = "1" }
 raptorq = { version = "2" }
-rayon = { version = "1" }

@@ -13,13 +13,12 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use once_cell::sync::Lazy;
 use qft::common::{
-  erasure::decode_file,
+  erasure::{decode_block, BLOCK_SIZE, DATA_PACKET_COUNT_PER_BLOCK},
   flags::{
     FLAG_FILE_DECODE_ERROR, FLAG_FILE_DECODE_OK, FLAG_HEARTBEAT, FLAG_REQUEST_ID,
     FLAG_UPLOAD_COMPLETE, FLAG_UPLOAD_PACKET,
   },
 };
-use raptorq::ObjectTransmissionInformation;
 use tokio::{
   fs::File,
   io::{AsyncReadExt, AsyncWriteExt},
@@ -32,9 +31,10 @@ use crate::cert::get_self_signed_cert;
 static TASKS: Lazy<Mutex<HashMap<u128, Task>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 struct Task {
-  config: ObjectTransmissionInformation,
-  packet_count: u32,
-  recv_packets: Vec<(u32, Arc<bytes::Bytes>)>,
+  file: File,
+  file_size: u64,
+  recv_blocks: HashMap<u32, Vec<bytes::Bytes>>,
+  rebuilt_blocks: HashSet<u32>,
 }
 
 #[tokio::main]
@@ -132,14 +132,33 @@ async fn handle_raw_datagram(datagram: bytes::Bytes) -> Result<()> {
   }
 
   let uuid = cur.read_u128().await?;
-  let packet_id = cur.read_u32().await?;
-
+  let block_id = cur.read_u32().await?;
   let packet = datagram.slice((cur.position() as usize)..datagram.len());
 
   let mut tasks = TASKS.lock().await;
 
   if let Some(task) = tasks.get_mut(&uuid) {
-    task.recv_packets.push((packet_id, Arc::new(packet)))
+    if task.rebuilt_blocks.contains(&block_id) {
+      return Ok(());
+    }
+
+    if task.recv_blocks.contains_key(&block_id) {
+      task.recv_blocks.get_mut(&block_id).unwrap().push(packet);
+
+      if task.recv_blocks.get(&block_id).unwrap().len() >= DATA_PACKET_COUNT_PER_BLOCK {
+        let packets = task.recv_blocks.get(&block_id).unwrap();
+        let result = decode_block(&task.file, block_id, task.file_size, packets).await;
+        match result {
+          Ok(()) => {
+            task.rebuilt_blocks.insert(block_id);
+            task.recv_blocks.remove(&block_id);
+          }
+          Err(_) => (),
+        }
+      }
+    } else {
+      task.recv_blocks.insert(block_id, vec![packet]);
+    }
   }
 
   Ok(())
@@ -150,14 +169,10 @@ async fn handle_stream((mut send, mut recv): (quinn::SendStream, quinn::RecvStre
 
   match flag {
     FLAG_REQUEST_ID => {
-      let packet_count = recv.read_u32().await?;
-      let config = ObjectTransmissionInformation::new(
-        recv.read_u64().await?,
-        recv.read_u16().await?,
-        recv.read_u8().await?,
-        recv.read_u16().await?,
-        recv.read_u8().await?,
-      );
+      let file_size = recv.read_u64().await?;
+      let filename = String::from_utf8(recv.read_to_end(1024).await?)?;
+
+      let file = File::create(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&filename)).await?;
 
       let uuid = Uuid::new_v4();
 
@@ -165,9 +180,10 @@ async fn handle_stream((mut send, mut recv): (quinn::SendStream, quinn::RecvStre
       tasks.insert(
         uuid.as_u128(),
         Task {
-          config,
-          packet_count,
-          recv_packets: vec![],
+          file,
+          file_size,
+          rebuilt_blocks: HashSet::new(),
+          recv_blocks: HashMap::new(),
         },
       );
 
@@ -179,50 +195,38 @@ async fn handle_stream((mut send, mut recv): (quinn::SendStream, quinn::RecvStre
       let uuid = recv.read_u128().await?;
 
       let mut tasks = TASKS.lock().await;
-      let task = tasks.get(&uuid).context("invalid id")?;
+      let task = tasks.get(&uuid).context("Invalid ID")?;
 
-      let packets: Vec<Arc<bytes::Bytes>> =
-        task.recv_packets.iter().map(|x| x.1.to_owned()).collect();
+      let total_blocks = (task.file_size as f32 / BLOCK_SIZE as f32).ceil() as usize;
 
       println!(
-        "Upload complete. Orig: {}, Recv: {}",
-        task.packet_count,
-        task.recv_packets.len()
+        "Client upload completed. Rebuilt blocks: {}/{}",
+        task.rebuilt_blocks.len(),
+        total_blocks
       );
 
-      // Decode and encode using spwan blocking
-      match decode_file(task.config, packets).await {
-        Ok(data) => {
-          send.write_u8(FLAG_FILE_DECODE_OK).await?;
-          tasks.remove(&uuid);
+      if task.rebuilt_blocks.len() == total_blocks {
+        send.write_u8(FLAG_FILE_DECODE_OK).await?;
+        println!("Received successfully.");
+        tasks.remove(&uuid).unwrap();
+        return Ok(());
+      }
 
-          let save_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(uuid.to_string());
-          let mut file = File::create(save_path).await?;
-          file.write_all_buf(&mut data.as_slice()).await?;
+      send.write_u8(FLAG_FILE_DECODE_ERROR).await?;
 
-          Ok(())
-        }
-        Err(_) => {
-          send.write_u8(FLAG_FILE_DECODE_ERROR).await?;
-
-          let mut recv_ids: HashSet<u32> = HashSet::new();
-          recv_ids.extend(task.recv_packets.iter().map(|x| x.0));
-
-          let mut missing = vec![];
-          for i in 1..=task.packet_count {
-            if !recv_ids.contains(&i) {
-              missing.push(i)
-            }
-          }
-
-          send.write_u32(missing.len() as u32).await?;
-          for i in missing {
-            send.write_u32(i).await?;
-          }
-
-          Ok(())
+      let mut missing: Vec<u32> = vec![];
+      for i in 0..total_blocks {
+        if !task.rebuilt_blocks.contains(&(i as u32)) {
+          missing.push(i as u32)
         }
       }
+
+      send.write_u32(missing.len() as u32).await?;
+      for i in missing {
+        send.write_u32(i).await?;
+      }
+
+      Ok(())
     }
 
     FLAG_HEARTBEAT => loop {

@@ -3,7 +3,7 @@ pub const FLAG_LENGTH: usize = 8;
 pub const FLAG_OK: u8 = 0b00000000;
 pub const FLAG_ERROR: u8 = 0b00000001;
 
-/// Request a unique ID for uploading. Next is the u32 packet count, u64 `transfer_length`, u16 `symbol_size`, u8 `num_source_blocks`, u16 `num_sub_blocks`, and u8 `symbol_alignment`
+/// Request a unique ID for uploading. Next is the u64 file size and UTF-8 filename.
 /// Response with u128 ID.
 pub const FLAG_REQUEST_ID: u8 = 0b00000010;
 
