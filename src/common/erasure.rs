@@ -1,8 +1,11 @@
-use std::io::SeekFrom;
+use std::{io::SeekFrom, iter};
 
 use anyhow::{anyhow, Context, Result};
 use once_cell::sync::Lazy;
-use raptorq::{Decoder, Encoder, EncodingPacket, ObjectTransmissionInformation};
+use raptorq::{
+  EncodingPacket, ObjectTransmissionInformation, SourceBlockDecoder, SourceBlockEncoder,
+  SourceBlockEncodingPlan,
+};
 use tokio::{
   fs::File,
   io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
@@ -29,6 +32,8 @@ static ENCODE_CONFIG: Lazy<ObjectTransmissionInformation> = Lazy::new(|| {
     ALIGNMENT,
   )
 });
+static ENCODE_PLAN: Lazy<SourceBlockEncodingPlan> =
+  Lazy::new(|| SourceBlockEncodingPlan::generate((BLOCK_SIZE / SYMBOL_SIZE as u64) as u16));
 
 pub async fn encode_block(file: &File, block_id: u32, parity_rate: f32) -> Result<Vec<Vec<u8>>> {
   let mut file = file.try_clone().await?;
@@ -51,12 +56,11 @@ pub async fn encode_block(file: &File, block_id: u32, parity_rate: f32) -> Resul
   let parity_per_block = (parity_rate * (BLOCK_SIZE as f32 / MAX_PACKET_SIZE as f32)) as u32;
 
   let packets = task::spawn_blocking(move || {
-    let encoder = Encoder::new(&block_data, ENCODE_CONFIG.clone());
-    let packets: Vec<Vec<u8>> = encoder
-      .get_encoded_packets(parity_per_block)
-      .iter()
-      .map(|packet| packet.serialize())
-      .collect();
+    let block_encoder =
+      SourceBlockEncoder::with_encoding_plan(0, &ENCODE_CONFIG, &block_data, &ENCODE_PLAN);
+    let mut packets = block_encoder.source_packets();
+    packets.extend(block_encoder.repair_packets(0, parity_per_block));
+    let packets = packets.into_iter().map(|x| x.serialize()).collect();
 
     packets
   })
@@ -77,10 +81,13 @@ pub async fn decode_block(
   let mut packets = packets.clone();
 
   let data = task::spawn_blocking(move || {
-    let mut decoder = Decoder::new(ENCODE_CONFIG.clone());
+    let mut block_decoder = SourceBlockDecoder::new(0, &ENCODE_CONFIG, BLOCK_SIZE);
+
     let mut result;
     while !packets.is_empty() {
-      result = decoder.decode(EncodingPacket::deserialize(&packets.pop().unwrap()));
+      result = block_decoder.decode(iter::once(EncodingPacket::deserialize(
+        &packets.pop().unwrap(),
+      )));
       if let Some(decoded) = result {
         return Ok(decoded);
       }

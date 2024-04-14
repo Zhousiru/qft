@@ -22,7 +22,7 @@ async fn main() {
   let file_path = args.get(1).context("No file path provided").unwrap();
   let qps: u64 = match args.get(2) {
     Some(v) => v.parse().context("Invalid QPS").unwrap(),
-    None => 0,
+    None => 180000,
   };
   if let Some(addr) = args.get(3) {
     server_addr = addr
