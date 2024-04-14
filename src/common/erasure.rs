@@ -16,7 +16,7 @@ pub const BLOCK_SIZE: u64 = 1 * 1024 * 1024;
 pub const MAX_PACKET_SIZE: u16 = 1024;
 
 pub const TRANSFER_LENGTH: u64 = BLOCK_SIZE;
-pub const SYMBOL_SIZE: u16 = 1024;
+pub const SYMBOL_SIZE: u16 = MAX_PACKET_SIZE - MAX_PACKET_SIZE % ALIGNMENT as u16;
 pub const SOURCE_BLOCKS: u8 = 1;
 pub const SUB_BLOCKS: u16 = 1;
 pub const ALIGNMENT: u8 = 8;
@@ -75,10 +75,9 @@ pub async fn decode_block(
   file: &File,
   block_id: u32,
   file_size: u64,
-  packets: &Vec<bytes::Bytes>,
+  mut packets: Vec<bytes::Bytes>,
 ) -> Result<()> {
   let mut file = file.try_clone().await?;
-  let mut packets = packets.clone();
 
   let data = task::spawn_blocking(move || {
     let mut block_decoder = SourceBlockDecoder::new(0, &ENCODE_CONFIG, BLOCK_SIZE);

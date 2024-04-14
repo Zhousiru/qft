@@ -33,7 +33,7 @@ static TASKS: Lazy<Mutex<HashMap<u128, Task>>> = Lazy::new(|| Mutex::new(HashMap
 struct Task {
   file: File,
   file_size: u64,
-  recv_blocks: HashMap<u32, Vec<bytes::Bytes>>,
+  recv_blocks: HashMap<u32, HashSet<bytes::Bytes>>,
   rebuilt_blocks: HashSet<u32>,
 }
 
@@ -143,21 +143,36 @@ async fn handle_raw_datagram(datagram: bytes::Bytes) -> Result<()> {
     }
 
     if task.recv_blocks.contains_key(&block_id) {
-      task.recv_blocks.get_mut(&block_id).unwrap().push(packet);
+      let recv_map = task.recv_blocks.get_mut(&block_id).unwrap();
+      let inserted = recv_map.insert(packet);
 
-      if task.recv_blocks.get(&block_id).unwrap().len() >= DATA_PACKET_COUNT_PER_BLOCK {
-        let packets = task.recv_blocks.get(&block_id).unwrap();
-        let result = decode_block(&task.file, block_id, task.file_size, packets).await;
+      if (recv_map.len() >= DATA_PACKET_COUNT_PER_BLOCK) && inserted {
+        let result = decode_block(
+          &task.file,
+          block_id,
+          task.file_size,
+          Vec::from_iter(recv_map.iter().map(|x| x.clone())),
+        )
+        .await;
         match result {
           Ok(()) => {
             task.rebuilt_blocks.insert(block_id);
             task.recv_blocks.remove(&block_id);
           }
-          Err(_) => (),
+          Err(_) => {
+            println!(
+              "Failed to decode block {}: {}/{}",
+              block_id,
+              recv_map.len(),
+              DATA_PACKET_COUNT_PER_BLOCK
+            )
+          }
         }
       }
     } else {
-      task.recv_blocks.insert(block_id, vec![packet]);
+      let mut recv = HashSet::new();
+      recv.insert(packet);
+      task.recv_blocks.insert(block_id, recv);
     }
   }
 
@@ -207,7 +222,7 @@ async fn handle_stream((mut send, mut recv): (quinn::SendStream, quinn::RecvStre
 
       if task.rebuilt_blocks.len() == total_blocks {
         send.write_u8(FLAG_FILE_DECODE_OK).await?;
-        println!("Received successfully.");
+        println!("Received successfully");
         tasks.remove(&uuid).unwrap();
         return Ok(());
       }
