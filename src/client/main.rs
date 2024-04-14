@@ -96,6 +96,8 @@ async fn main() {
 
   let mut missing: Vec<u32> = (0..block_count).collect();
 
+  let start_time = time::Instant::now();
+
   loop {
     let mut interval = if qps != 0 {
       println!("Upload {} blocks with QPS {}", missing.len(), qps);
@@ -130,6 +132,13 @@ async fn main() {
 
     if recv.read_u8().await.unwrap() == FLAG_FILE_DECODE_OK {
       println!("Server confirmed decoded successfully");
+      let elapsed = time::Instant::elapsed(&start_time);
+      println!(
+        "Done in {:?}. Average speed: {:.2} MiB/s",
+        elapsed,
+        file_size as f64 / 1024.0 / 1024.0 / elapsed.as_secs_f64()
+      );
+
       break;
     }
 
