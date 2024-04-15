@@ -1,4 +1,4 @@
-use std::{io::SeekFrom, iter};
+use std::{io::SeekFrom, iter, path::PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use once_cell::sync::Lazy;
@@ -7,7 +7,7 @@ use raptorq::{
   SourceBlockEncodingPlan,
 };
 use tokio::{
-  fs::File,
+  fs::{self, File},
   io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
   task,
 };
@@ -72,13 +72,11 @@ pub async fn encode_block(file: &File, block_id: u32, parity_rate: f32) -> Resul
 }
 
 pub async fn decode_block(
-  file: &File,
+  uuid: u128,
   block_id: u32,
   file_size: u64,
   mut packets: Vec<bytes::Bytes>,
 ) -> Result<()> {
-  let mut file = file.try_clone().await?;
-
   let data = task::spawn_blocking(move || {
     let mut block_decoder = SourceBlockDecoder::new(0, &ENCODE_CONFIG, BLOCK_SIZE);
 
@@ -102,7 +100,13 @@ pub async fn decode_block(
     (file_size - cursor_start) as usize
   };
 
-  file.seek(SeekFrom::Start(cursor_start)).await?;
+  let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    .join("tmp")
+    .join(uuid.to_string());
+  fs::create_dir_all(&base_path).await?;
+  let mut file = File::create(base_path.join(block_id.to_string())).await?;
+
+  // file.seek(SeekFrom::Start(cursor_start)).await?;
   file.write_all(&data[0..data_end]).await?;
 
   Ok(())

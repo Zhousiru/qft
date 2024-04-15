@@ -20,8 +20,8 @@ use qft::common::{
   },
 };
 use tokio::{
-  fs::File,
-  io::{AsyncReadExt, AsyncWriteExt},
+  fs::{self, File},
+  io::{self, AsyncReadExt, AsyncWriteExt},
   sync::Mutex,
 };
 use uuid::Uuid;
@@ -31,7 +31,7 @@ use crate::cert::get_self_signed_cert;
 static TASKS: Lazy<Mutex<HashMap<u128, Task>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 struct Task {
-  file: File,
+  filename: String,
   file_size: u64,
   recv_blocks: HashMap<u32, HashSet<bytes::Bytes>>,
   rebuilt_blocks: HashSet<u32>,
@@ -148,7 +148,7 @@ async fn handle_raw_datagram(datagram: bytes::Bytes) -> Result<()> {
 
       if (recv_map.len() >= DATA_PACKET_COUNT_PER_BLOCK) && inserted {
         let result = decode_block(
-          &task.file,
+          uuid,
           block_id,
           task.file_size,
           Vec::from_iter(recv_map.iter().map(|x| x.clone())),
@@ -187,15 +187,13 @@ async fn handle_stream((mut send, mut recv): (quinn::SendStream, quinn::RecvStre
       let file_size = recv.read_u64().await?;
       let filename = String::from_utf8(recv.read_to_end(1024).await?)?;
 
-      let file = File::create(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&filename)).await?;
-
       let uuid = Uuid::new_v4();
 
       let mut tasks = TASKS.lock().await;
       tasks.insert(
         uuid.as_u128(),
         Task {
-          file,
+          filename,
           file_size,
           rebuilt_blocks: HashSet::new(),
           recv_blocks: HashMap::new(),
@@ -223,6 +221,21 @@ async fn handle_stream((mut send, mut recv): (quinn::SendStream, quinn::RecvStre
       if task.rebuilt_blocks.len() == total_blocks {
         send.write_u8(FLAG_FILE_DECODE_OK).await?;
         println!("Received successfully");
+
+        let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("recv");
+        let tmp_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+          .join("tmp")
+          .join(uuid.to_string());
+        fs::create_dir_all(&base_path).await?;
+        let mut output = File::create(base_path.join(&task.filename)).await?;
+        for block_id in 0..total_blocks {
+          let mut input = File::open(tmp_path.join(block_id.to_string())).await?;
+          io::copy(&mut input, &mut output).await?;
+        }
+
+        println!("Merged successfully");
+
+        fs::remove_dir_all(tmp_path).await?;
         tasks.remove(&uuid).unwrap();
         return Ok(());
       }
