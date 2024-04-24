@@ -1,6 +1,8 @@
 export interface Task {
+  filename: string
+  fileSize: number
+  uuid: string
   blockCount: number
   doneBlockCount: number
-  retransmissionCount: number
-  isMerging: boolean
+  status: 'recv' | 'merge' | 'done'
 }

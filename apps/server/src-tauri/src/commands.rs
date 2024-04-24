@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use tauri::AppHandle;
 use tokio::fs;
 
+use crate::server::server_thread;
+
 #[tauri::command]
 pub async fn gen_cert(app_handle: AppHandle) {
   let base_path = PathBuf::from(app_handle.path_resolver().app_data_dir().unwrap()).join("cert");
@@ -17,4 +19,9 @@ pub async fn gen_cert(app_handle: AppHandle) {
   fs::create_dir_all(base_path).await.unwrap();
   fs::write(&cert_path, &cert).await.unwrap();
   fs::write(&key_path, &key).await.unwrap();
+}
+
+#[tauri::command]
+pub async fn start_server(app_handle: AppHandle) {
+  tokio::spawn(async move { server_thread(app_handle).await });
 }
