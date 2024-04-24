@@ -12,7 +12,10 @@
   },
   "tauri": {
     "allowlist": {
-      "all": false
+      "all": true,
+      "fs": {
+        "scope": ["**"]
+      }
     },
     "bundle": {
       "active": true,
@@ -29,7 +32,7 @@
         "icons/icon.icns",
         "icons/icon.ico"
       ],
-      "identifier": "com.tauri.dev",
+      "identifier": "app.mofu.qft.server",
       "longDescription": "",
       "macOS": {
         "entitlements": null,
