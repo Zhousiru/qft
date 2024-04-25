@@ -83,6 +83,7 @@ function App() {
     ) {
       await createDir('recv', {
         dir: BaseDirectory.AppData,
+        recursive: true,
       })
     }
     await shell.open(await resolve(await appDataDir(), 'recv'))
@@ -136,7 +137,7 @@ function App() {
         >
           <Icon as={MdList} boxSize={5} />
           <Text fontSize={14} fontWeight="bold">
-            传输任务列表
+            接收任务列表
           </Text>
           <Button
             ml="auto"
@@ -157,7 +158,7 @@ function App() {
                   mt={4}
                   fontSize={14}
                 >
-                  暂无传输任务
+                  暂无接收任务
                 </Box>
               )}
 
